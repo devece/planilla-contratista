@@ -133,6 +133,16 @@ label.fl{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.0
 .chk-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:14px;font-weight:700}
 .chk-row input{width:16px;height:16px}
 
+.doc-box{background:var(--bg);border:1px dashed var(--line2);border-radius:var(--r);padding:14px 16px;margin-bottom:12px}
+.doc-box .nhead{display:flex;align-items:center;gap:8px;font-weight:800;font-size:14px;color:var(--ink);margin-bottom:4px}
+.doc-box .nhint{font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:10px}
+.upload-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.upload-row input[type=file]{font-size:12.5px;max-width:230px;font-family:var(--sans)}
+.doc-link{font-size:13.5px;font-weight:700;color:var(--navy);text-decoration:none;display:inline-flex;align-items:center;gap:5px}
+.doc-link:hover{text-decoration:underline}
+.parse-status{font-size:12.5px;margin-top:8px;line-height:1.5}
+.parse-status.ok{color:var(--ok)}.parse-status.err{color:var(--err)}
+
 #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(14px);background:var(--ink);color:#fff;padding:11px 20px;border-radius:10px;font-size:15px;font-weight:600;font-family:var(--sans);z-index:9999;opacity:0;transition:opacity .24s,transform .24s;pointer-events:none;display:flex;align-items:center;gap:9px;box-shadow:0 6px 28px rgba(0,0,0,.2)}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 #toast.tok{background:#065F46}#toast.terr{background:#991B1B}#toast.twarn{background:#92400E}
@@ -197,6 +207,14 @@ label.fl{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.0
       <button class="mx" onclick="closeOv('ov-nuevo')">✕</button>
     </div>
     <div class="mbody">
+      <div class="doc-box">
+        <div class="nhead">📋 ¿Tienes el informe de iAuditor de la visita?</div>
+        <div class="nhint">Si el proyecto parte desde cero (sin Detalle Comercial todavía), sube el PDF de la visita y completamos solo estos datos. Igual podés editarlos después.</div>
+        <div class="upload-row">
+          <input type="file" id="nv-iauditor-file" accept="application/pdf" onchange="onIAuditorNuevo(this)">
+          <span id="nv-iauditor-status" class="parse-status"></span>
+        </div>
+      </div>
       <div class="campo"><label class="fl">Nombre del proyecto *</label><input type="text" id="nv-nombre" placeholder="Ej: Instalación GLP — Edificio Los Robles"></div>
       <div class="campo"><label class="fl">Cliente</label><input type="text" id="nv-cliente"></div>
       <div class="campo"><label class="fl">Dirección</label><input type="text" id="nv-direccion"></div>
@@ -253,7 +271,9 @@ label.fl{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.0
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 // ── Conexión (misma base del proyecto "planilla maestra", tablas propias y separadas de "proyectos") ──
 var SUPABASE_URL='https://aocbetucqvgxxjopjbjm.supabase.co';
 var SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvY2JldHVjcXZneHhqb3BqYmptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxMzI1ODEsImV4cCI6MjEwMTcwODU4MX0.QfsInd_7iyeUHInGEMMSzLUh_FILaG4QPVn9pC8RByI';
@@ -276,6 +296,96 @@ var HITOS_DEF=[
 var BD=[];       // proyectos del contratista actual
 var CONTRATISTA=null;
 var DET_ID=null; // id abierto en el modal de detalle
+var NV_EXTRA=null;      // datos extra extraídos del iAuditor, a guardar junto al proyecto nuevo
+var NV_IAUDITOR_FILE=null; // PDF del iAuditor elegido en "Nuevo proyecto", se sube recién al crear
+
+// ── Lectura de PDF (iAuditor / DC) en el navegador, con pdf.js ──
+async function extraerTextoPDF(file){
+  var buf=await file.arrayBuffer();
+  var doc=await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+  var partes=[];
+  for(var i=1;i<=doc.numPages;i++){
+    var pagina=await doc.getPage(i);
+    var contenido=await pagina.getTextContent();
+    partes.push(contenido.items.map(function(it){return it.str;}).join('\n'));
+  }
+  return partes.join('\n');
+}
+
+// ── Parser del informe "Levantamiento Visita Ventas Proyectos Masivos" (iAuditor) ──
+// Best-effort: si no encuentra una etiqueta simplemente deja ese campo vacío,
+// nunca falla — el contratista siempre revisa y puede corregir antes de guardar.
+function parseIAuditor(texto){
+  function primeraLinea(etiqueta, maxLineas){
+    maxLineas=maxLineas||1;
+    var idx=texto.indexOf(etiqueta);
+    if(idx===-1) return '';
+    var resto=texto.slice(idx+etiqueta.length).split('\n');
+    var encontradas=[];
+    for(var i=0;i<resto.length && encontradas.length<maxLineas;i++){
+      var l=resto[i].trim();
+      if(l) encontradas.push(l);
+    }
+    return encontradas.join(' ');
+  }
+  function numeroDespues(etiqueta){
+    var idx=texto.indexOf(etiqueta);
+    if(idx===-1) return '';
+    var ventana=texto.slice(idx+etiqueta.length, idx+etiqueta.length+400);
+    var m=ventana.match(/(\d+(?:[.,]\d+)?)/);
+    return m ? m[1].replace(',','.') : '';
+  }
+  function valorDeclaracion(codigo){
+    var re=new RegExp('\\b'+codigo.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b\\s*\\n\\s*\\n\\s*(Si|No|N/A)\\b');
+    var m=texto.match(re);
+    return m ? m[1] : '';
+  }
+  var out={};
+  out.iauditor_doc_num=primeraLinea('Número de Documento');
+  out.iauditor_fecha_visita=primeraLinea('Fecha Visita');
+  out.cliente=primeraLinea('Nombre Cliente', 2);
+  out.direccion=primeraLinea('Dirección del Proyecto la que será utilizada en la documentación SEC');
+  out.contacto_cliente=primeraLinea('Representantes por el Cliente');
+  out.supervisor_abastible=primeraLinea('Representantes por Abastible');
+  out.tipo_proyecto=primeraLinea('Tipo de Proyecto');
+  out.potencia_mcal=numeroDespues('Potencia Instalada total en Mcal/h');
+
+  var ubicacion=primeraLinea('Ubicación', 2);
+  out.comuna=ubicacion ? ubicacion.split(',')[0].trim() : '';
+  out.region='';
+  if(ubicacion){
+    var m=ubicacion.match(/,\s*(RM|[IVXLC]+)\s*-\s*\S/i);
+    if(m){
+      var codigo=m[1].toUpperCase();
+      var opciones=Array.prototype.map.call(document.querySelectorAll('#nv-region option'), function(o){return o.textContent;}).filter(Boolean);
+      var encontrada=opciones.find(function(r){return r.toUpperCase().indexOf(codigo+' ')===0;});
+      if(encontrada) out.region=encontrada;
+    }
+  }
+
+  var tanqueTipo=primeraLinea('2.3.2 Tipo de Tanques');
+  var vertHoriz=primeraLinea('Vertical u Horizontal?');
+  var capacidad=primeraLinea('Capacidad', 2);
+  var cantTanques=numeroDespues('2.3.3 Cantidad de tanques');
+  out.tanque_info=[tanqueTipo,vertHoriz,capacidad].filter(Boolean).join(' · ')+(cantTanques?' (cantidad: '+cantTanques+')':'');
+
+  var declaraciones=[];
+  ['TC2','TC5','TC6','TC7','TC8','Sello Verde','Inspección Reducida'].forEach(function(codigo){
+    if(valorDeclaracion(codigo)==='Si') declaraciones.push(codigo);
+  });
+  out.declaraciones_requeridas=declaraciones.join(', ');
+
+  return out;
+}
+
+// ── Subir el PDF (iAuditor o DC) al storage y devolver su URL pública ──
+async function subirArchivoStorage(file, proyectoId, tipo){
+  var ruta=tipo+'/'+proyectoId+'-'+Date.now()+'-'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  var res=await sb.storage.from('contratista-docs').upload(ruta, file, {contentType:'application/pdf'});
+  if(res.error) throw res.error;
+  var pub=sb.storage.from('contratista-docs').getPublicUrl(ruta);
+  return pub.data.publicUrl;
+}
 
 // ── Identificación (sin login real, igual de simple que el resto de la app) ──
 function entrar(){
@@ -385,7 +495,36 @@ function render(){
 // ── Crear proyecto ──
 function abrirNuevo(){
   ['nv-nombre','nv-cliente','nv-direccion','nv-comuna','nv-region'].forEach(function(id){document.getElementById(id).value='';});
+  document.getElementById('nv-iauditor-file').value='';
+  document.getElementById('nv-iauditor-status').textContent='';
+  document.getElementById('nv-iauditor-status').className='parse-status';
+  NV_EXTRA=null; NV_IAUDITOR_FILE=null;
   document.getElementById('ov-nuevo').classList.add('open');
+}
+async function onIAuditorNuevo(inputEl){
+  var file=inputEl.files[0];
+  var estado=document.getElementById('nv-iauditor-status');
+  if(!file)return;
+  estado.className='parse-status'; estado.textContent='⏳ Leyendo PDF…';
+  try{
+    var texto=await extraerTextoPDF(file);
+    var extra=parseIAuditor(texto);
+    NV_EXTRA=extra; NV_EXTRA.iauditor_texto_extraido=texto; NV_IAUDITOR_FILE=file;
+    if(extra.cliente) document.getElementById('nv-cliente').value=extra.cliente;
+    if(extra.direccion) document.getElementById('nv-direccion').value=extra.direccion;
+    if(extra.comuna) document.getElementById('nv-comuna').value=extra.comuna;
+    if(extra.region) document.getElementById('nv-region').value=extra.region;
+    if(!document.getElementById('nv-nombre').value.trim() && extra.cliente){
+      document.getElementById('nv-nombre').value='Instalación GLP — '+extra.cliente;
+    }
+    var encontrados=['cliente','direccion','comuna','region','supervisor_abastible','tipo_proyecto','potencia_mcal'].filter(function(k){return extra[k];});
+    estado.className='parse-status ok';
+    estado.textContent='✅ Datos completados desde el iAuditor ('+encontrados.length+' campos) — revísalos antes de crear.'+(extra.supervisor_abastible?' Supervisor Abastible detectado: '+esc(extra.supervisor_abastible)+'.':'');
+  }catch(e){
+    console.error(e);
+    estado.className='parse-status err';
+    estado.textContent='⚠️ No se pudo leer el PDF, completa los datos a mano.';
+  }
 }
 async function crearProyecto(){
   var nombre=document.getElementById('nv-nombre').value.trim();
@@ -398,13 +537,27 @@ async function crearProyecto(){
     region:document.getElementById('nv-region').value||null,
     notif_activa:false, notif_email:null
   };
+  if(NV_EXTRA){
+    ['contacto_cliente','supervisor_abastible','iauditor_doc_num','iauditor_fecha_visita',
+     'tipo_proyecto','tanque_info','declaraciones_requeridas','iauditor_texto_extraido'].forEach(function(k){
+      if(NV_EXTRA[k]) payload[k]=NV_EXTRA[k];
+    });
+    if(NV_EXTRA.potencia_mcal) payload.potencia_mcal=Number(NV_EXTRA.potencia_mcal)||null;
+  }
   try{
     var res=await sb.from(TABLA).insert(payload).select().single();
     if(res.error) throw res.error;
+    var nuevoId=res.data.id;
+    if(NV_IAUDITOR_FILE){
+      try{
+        var url=await subirArchivoStorage(NV_IAUDITOR_FILE, nuevoId, 'iauditor');
+        await sb.from(TABLA).update({iauditor_url:url}).eq('id',nuevoId);
+      }catch(e){ console.error('No se pudo subir el iAuditor', e); }
+    }
     closeOv('ov-nuevo');
     await cargarProyectos();
     toast('✅ Proyecto creado','ok');
-    abrirDetalle(res.data.id);
+    abrirDetalle(nuevoId);
   }catch(e){
     console.error(e);
     toast('⚠️ No se pudo crear: '+(e.message||e),'err');
@@ -435,6 +588,50 @@ function renderDetalle(p){
   h+='</div>';
   h+='<div class="campo"><label class="fl">Observaciones</label><textarea onchange="guardarCampo('+p.id+',\'obs\',this.value)">'+esc(p.obs)+'</textarea></div>';
 
+  h+='<div class="seccion-tit">Contacto Abastible</div>';
+  h+='<div class="doc-box">';
+  h+='<div class="nhint">Quién adjudicó o supervisa el proyecto por Abastible — se guarda para saber a quién dirigir los correos automáticos más adelante.</div>';
+  h+='<div class="fila2">';
+  h+=campoEditable(p,'supervisor_abastible','Supervisor Abastible');
+  h+=campoEditable(p,'supervisor_abastible_correo','Correo del supervisor');
+  h+='</div>';
+  h+=campoEditable(p,'contacto_cliente','Contacto del cliente en terreno');
+  h+='</div>';
+
+  h+='<div class="seccion-tit">Documentos del proyecto</div>';
+  h+='<div class="doc-box">';
+  h+='<div class="nhead">📋 Informe iAuditor</div>';
+  if(p.iauditor_url){
+    h+='<div class="nhint">Cargado'+(p.iauditor_doc_num?' · Doc. '+esc(p.iauditor_doc_num):'')+(p.iauditor_fecha_visita?' · Visita '+esc(p.iauditor_fecha_visita):'')+'</div>';
+    h+='<a class="doc-link" href="'+esc(p.iauditor_url)+'" target="_blank" rel="noopener">📄 Ver PDF cargado</a>';
+  } else {
+    h+='<div class="nhint">Todavía no hay iAuditor cargado. Si lo subís, completamos los campos vacíos de este proyecto.</div>';
+    h+='<div class="upload-row"><input type="file" accept="application/pdf" onchange="cargarIAuditorExistente('+p.id+',this)"><span id="doc-iauditor-status" class="parse-status"></span></div>';
+  }
+  h+='</div>';
+  h+='<div class="doc-box">';
+  h+='<div class="nhead">📑 Detalle Comercial (DC)</div>';
+  if(p.dc_url){
+    h+='<div class="nhint">Cargado — ábrelo para completar a mano los datos que traiga (costo, potencia validada, tanque, etc).</div>';
+    h+='<a class="doc-link" href="'+esc(p.dc_url)+'" target="_blank" rel="noopener">📄 Ver DC cargado</a>&nbsp;&nbsp;';
+    h+='<label class="link-btn" style="cursor:pointer">Reemplazar<input type="file" accept="application/pdf" style="display:none" onchange="cargarDC('+p.id+',this)"></label>';
+  } else {
+    h+='<div class="nhint">Cuando Abastible te envíe el Detalle Comercial, cárgalo acá para tenerlo junto al proyecto.</div>';
+    h+='<div class="upload-row"><input type="file" accept="application/pdf" onchange="cargarDC('+p.id+',this)"><span id="doc-dc-status" class="parse-status"></span></div>';
+  }
+  h+='</div>';
+  if(p.tipo_proyecto||p.potencia_mcal||p.tanque_info||p.declaraciones_requeridas){
+    h+='<div class="doc-box">';
+    h+='<div class="nhead">🔧 Datos técnicos (del iAuditor)</div>';
+    h+='<div class="fila2">';
+    h+=campoEditable(p,'tipo_proyecto','Tipo de proyecto');
+    h+=campoEditable(p,'potencia_mcal','Potencia instalada (Mcal/h)');
+    h+='</div>';
+    h+=campoEditable(p,'tanque_info','Tanque');
+    h+=campoEditable(p,'declaraciones_requeridas','Declaraciones requeridas (TC2, TC6, etc.)');
+    h+='</div>';
+  }
+
   h+='<div class="seccion-tit">Hitos del proceso</div>';
   h+='<div class="hitos">';
   HITOS_DEF.forEach(function(hd,idx){ h+=renderHito(p, hd, idx); });
@@ -443,7 +640,7 @@ function renderDetalle(p){
   h+='<div class="seccion-tit">Notificaciones automáticas</div>';
   h+='<div class="notif-box">';
   h+='<div class="nhead">📧 Aviso por correo al completar un hito</div>';
-  h+='<div class="nhint">Por ahora esto solo guarda tu preferencia y deja el aviso <b>en cola</b> (tabla <span style="font-family:var(--mono)">contratista_notif_cola</span>): el envío real de correos se conecta más adelante, cuando definamos con qué se manda.</div>';
+  h+='<div class="nhint">Por ahora esto solo guarda tu preferencia y deja el aviso <b>en cola</b> (tabla <span style="font-family:var(--mono)">contratista_notif_cola</span>), sumando el correo del Supervisor Abastible si lo cargaste arriba: el envío real de correos se conecta más adelante, cuando definamos con qué se manda.</div>';
   h+='<div class="chk-row"><input type="checkbox" id="notif-activa" '+(p.notif_activa?'checked':'')+' onchange="guardarCampo('+p.id+',\'notif_activa\',this.checked)"> Notificarme cuando marque un hito como hecho</div>';
   h+='<div class="campo" style="margin-bottom:0"><label class="fl">Correo(s), separados por coma</label><input type="text" id="notif-email" value="'+esc(p.notif_email)+'" placeholder="tu@correo.cl" onchange="guardarCampo('+p.id+',\'notif_email\',this.value)"></div>';
   h+='</div>';
@@ -465,6 +662,60 @@ async function guardarCampo(id,key,val){
   }catch(e){
     console.error(e);
     toast('⚠️ No se pudo guardar: '+(e.message||e),'err');
+  }
+}
+
+// ── Cargar iAuditor a un proyecto ya existente: solo rellena los campos que estén vacíos ──
+async function cargarIAuditorExistente(id, inputEl){
+  var file=inputEl.files[0];
+  var estado=document.getElementById('doc-iauditor-status');
+  if(!file)return;
+  if(estado){ estado.className='parse-status'; estado.textContent='⏳ Leyendo PDF…'; }
+  try{
+    var p=BD.find(function(x){return x.id===id;});
+    var texto=await extraerTextoPDF(file);
+    var extra=parseIAuditor(texto);
+    var payload={iauditor_texto_extraido:texto};
+    ['cliente','direccion','comuna','region','contacto_cliente','supervisor_abastible',
+     'iauditor_doc_num','iauditor_fecha_visita','tipo_proyecto','tanque_info','declaraciones_requeridas'].forEach(function(k){
+      if(extra[k] && p && !p[k]) payload[k]=extra[k];
+    });
+    if(extra.potencia_mcal && p && !p.potencia_mcal) payload.potencia_mcal=Number(extra.potencia_mcal)||null;
+    var url=await subirArchivoStorage(file, id, 'iauditor');
+    payload.iauditor_url=url;
+    var res=await sb.from(TABLA).update(payload).eq('id',id);
+    if(res.error) throw res.error;
+    await cargarProyectos();
+    var refrescado=BD.find(function(x){return x.id===id;});
+    if(refrescado) renderDetalle(refrescado);
+    toast('✅ iAuditor cargado y campos vacíos completados','ok');
+  }catch(e){
+    console.error(e);
+    if(estado){ estado.className='parse-status err'; estado.textContent='⚠️ No se pudo procesar el PDF.'; }
+    toast('⚠️ No se pudo cargar el iAuditor: '+(e.message||e),'err');
+  }
+}
+
+// ── Cargar el Detalle Comercial: por ahora solo se adjunta (no hay parser propio) ──
+async function cargarDC(id, inputEl){
+  var file=inputEl.files[0];
+  var estado=document.getElementById('doc-dc-status');
+  if(!file)return;
+  if(estado){ estado.className='parse-status'; estado.textContent='⏳ Subiendo…'; }
+  try{
+    var texto='';
+    try{ texto=await extraerTextoPDF(file); }catch(e){ console.error('No se pudo extraer texto del DC', e); }
+    var url=await subirArchivoStorage(file, id, 'dc');
+    var res=await sb.from(TABLA).update({dc_url:url, dc_texto_extraido:texto||null}).eq('id',id);
+    if(res.error) throw res.error;
+    await cargarProyectos();
+    var refrescado=BD.find(function(x){return x.id===id;});
+    if(refrescado) renderDetalle(refrescado);
+    toast('✅ Detalle Comercial cargado','ok');
+  }catch(e){
+    console.error(e);
+    if(estado){ estado.className='parse-status err'; estado.textContent='⚠️ No se pudo subir el archivo.'; }
+    toast('⚠️ No se pudo cargar el DC: '+(e.message||e),'err');
   }
 }
 
@@ -527,8 +778,9 @@ async function quitarHito(id,key,lbl){
 }
 async function encolarNotificacion(p,hitoLbl){
   try{
+    var destinatarios=[p.notif_email, p.supervisor_abastible_correo].filter(Boolean).join(', ');
     await sb.from('contratista_notif_cola').insert({
-      proyecto_id:p.id, hito:hitoLbl, destinatario:p.notif_email,
+      proyecto_id:p.id, hito:hitoLbl, destinatario:destinatarios,
       asunto:'Proyecto '+p.nombre+' — '+hitoLbl,
       mensaje:'El hito "'+hitoLbl+'" del proyecto "'+p.nombre+'" se marcó como completado.',
       estado:'pendiente'
