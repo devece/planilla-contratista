@@ -28,10 +28,13 @@ real (proveedor de correo / Edge Function) se conecta más adelante.
   ("Levantamiento Visita Ventas Proyectos Masivos") pero todavía no tiene
   Detalle Comercial, puede subirlo al crear el proyecto. El parser
   (`parseIAuditor` en `index.html`, corre con pdf.js en el navegador) completa
-  cliente, dirección, comuna/región, contacto del cliente, **Supervisor
-  Abastible**, tipo de proyecto, potencia instalada, tanque y qué
-  declaraciones aplican (TC2/TC6/TC7/TC8/Sello Verde/Inspección Reducida).
-  Todo queda editable antes de guardar.
+  cliente, dirección, comuna/región, contacto del cliente, **Vendedor
+  Abastible** (quien hizo la visita comercial), tipo de proyecto, potencia
+  instalada, tanque y qué declaraciones aplican (TC2/TC6/TC7/TC8/Sello
+  Verde/Inspección Reducida). Todo queda editable antes de guardar.
+- El **Supervisor Abastible** (quien queda a cargo de la ejecución) es un
+  dato distinto que el iAuditor no trae — se carga siempre a mano, apenas
+  se sepa quién es, normalmente al adjudicarse el proyecto.
 - **Proyecto existente**: la misma carga se puede hacer después desde el
   detalle, y solo rellena los campos que estén vacíos (nunca pisa datos ya
   cargados a mano).

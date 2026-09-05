@@ -346,7 +346,10 @@ function parseIAuditor(texto){
   out.cliente=primeraLinea('Nombre Cliente', 2);
   out.direccion=primeraLinea('Dirección del Proyecto la que será utilizada en la documentación SEC');
   out.contacto_cliente=primeraLinea('Representantes por el Cliente');
-  out.supervisor_abastible=primeraLinea('Representantes por Abastible');
+  // "Representantes por Abastible" en este informe es quien hizo la visita comercial
+  // (el vendedor) — el Supervisor que queda a cargo de la ejecución se asigna después
+  // (normalmente al adjudicarse) y se carga a mano, nunca se auto-completa desde acá.
+  out.vendedor_abastible=primeraLinea('Representantes por Abastible');
   out.tipo_proyecto=primeraLinea('Tipo de Proyecto');
   out.potencia_mcal=numeroDespues('Potencia Instalada total en Mcal/h');
 
@@ -517,9 +520,9 @@ async function onIAuditorNuevo(inputEl){
     if(!document.getElementById('nv-nombre').value.trim() && extra.cliente){
       document.getElementById('nv-nombre').value='Instalación GLP — '+extra.cliente;
     }
-    var encontrados=['cliente','direccion','comuna','region','supervisor_abastible','tipo_proyecto','potencia_mcal'].filter(function(k){return extra[k];});
+    var encontrados=['cliente','direccion','comuna','region','vendedor_abastible','tipo_proyecto','potencia_mcal'].filter(function(k){return extra[k];});
     estado.className='parse-status ok';
-    estado.textContent='✅ Datos completados desde el iAuditor ('+encontrados.length+' campos) — revísalos antes de crear.'+(extra.supervisor_abastible?' Supervisor Abastible detectado: '+esc(extra.supervisor_abastible)+'.':'');
+    estado.textContent='✅ Datos completados desde el iAuditor ('+encontrados.length+' campos) — revísalos antes de crear.'+(extra.vendedor_abastible?' Vendedor Abastible de la visita: '+esc(extra.vendedor_abastible)+'.':'');
   }catch(e){
     console.error(e);
     estado.className='parse-status err';
@@ -538,7 +541,7 @@ async function crearProyecto(){
     notif_activa:false, notif_email:null
   };
   if(NV_EXTRA){
-    ['contacto_cliente','supervisor_abastible','iauditor_doc_num','iauditor_fecha_visita',
+    ['contacto_cliente','vendedor_abastible','iauditor_doc_num','iauditor_fecha_visita',
      'tipo_proyecto','tanque_info','declaraciones_requeridas','iauditor_texto_extraido'].forEach(function(k){
       if(NV_EXTRA[k]) payload[k]=NV_EXTRA[k];
     });
@@ -590,12 +593,15 @@ function renderDetalle(p){
 
   h+='<div class="seccion-tit">Contacto Abastible</div>';
   h+='<div class="doc-box">';
-  h+='<div class="nhint">Quién adjudicó o supervisa el proyecto por Abastible — se guarda para saber a quién dirigir los correos automáticos más adelante.</div>';
+  h+='<div class="nhint">El Supervisor es quien queda a cargo una vez adjudicado el proyecto — cárgalo a mano apenas lo sepas, se usará para saber a quién dirigir los correos automáticos más adelante.</div>';
   h+='<div class="fila2">';
-  h+=campoEditable(p,'supervisor_abastible','Supervisor Abastible');
+  h+=campoEditable(p,'supervisor_abastible','Supervisor Abastible (a cargo de la ejecución)');
   h+=campoEditable(p,'supervisor_abastible_correo','Correo del supervisor');
   h+='</div>';
+  h+='<div class="fila2">';
+  h+=campoEditable(p,'vendedor_abastible','Vendedor Abastible (de la visita comercial)');
   h+=campoEditable(p,'contacto_cliente','Contacto del cliente en terreno');
+  h+='</div>';
   h+='</div>';
 
   h+='<div class="seccion-tit">Documentos del proyecto</div>';
@@ -676,7 +682,7 @@ async function cargarIAuditorExistente(id, inputEl){
     var texto=await extraerTextoPDF(file);
     var extra=parseIAuditor(texto);
     var payload={iauditor_texto_extraido:texto};
-    ['cliente','direccion','comuna','region','contacto_cliente','supervisor_abastible',
+    ['cliente','direccion','comuna','region','contacto_cliente','vendedor_abastible',
      'iauditor_doc_num','iauditor_fecha_visita','tipo_proyecto','tanque_info','declaraciones_requeridas'].forEach(function(k){
       if(extra[k] && p && !p[k]) payload[k]=extra[k];
     });
