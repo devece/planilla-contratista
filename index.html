@@ -316,6 +316,12 @@ async function extraerTextoPDF(file){
 // Best-effort: si no encuentra una etiqueta simplemente deja ese campo vacío,
 // nunca falla — el contratista siempre revisa y puede corregir antes de guardar.
 function parseIAuditor(texto){
+  // pdf.js deja los números de página del PDF como líneas sueltas (ej. "2/25", o partido en
+  // "1/" + "25") intercaladas en el texto — si una pregunta queda sin responder, esa línea de
+  // "página" puede terminar siendo la primera línea no vacía después de la etiqueta.
+  function esRuidoDePagina(l){
+    return /^\d{1,3}\s*\/\s*\d{0,3}$/.test(l) || /^\d{1,3}$/.test(l);
+  }
   function primeraLinea(etiqueta, maxLineas){
     maxLineas=maxLineas||1;
     var idx=texto.indexOf(etiqueta);
@@ -324,9 +330,24 @@ function parseIAuditor(texto){
     var encontradas=[];
     for(var i=0;i<resto.length && encontradas.length<maxLineas;i++){
       var l=resto[i].trim();
-      if(l) encontradas.push(l);
+      if(l && !esRuidoDePagina(l)) encontradas.push(l);
     }
     return encontradas.join(' ');
+  }
+  // Los nombres de personas en este informe siempre vienen en MAYÚSCULAS. Si la primera
+  // línea real después de la etiqueta no tiene esa forma, es que la pregunta quedó sin
+  // responder y lo que sigue ya es contenido de otra sección — mejor dejarlo vacío que
+  // devolver un encabezado o un salto de página como si fuera el nombre.
+  function nombrePersona(etiqueta){
+    var idx=texto.indexOf(etiqueta);
+    if(idx===-1) return '';
+    var resto=texto.slice(idx+etiqueta.length).split('\n');
+    for(var i=0;i<resto.length;i++){
+      var l=resto[i].trim();
+      if(!l || esRuidoDePagina(l)) continue;
+      return /^[A-ZÀ-ÖØ-ÞÑ][A-ZÀ-ÖØ-ÞÑ\s.'-]{1,60}$/.test(l) ? l : '';
+    }
+    return '';
   }
   function numeroDespues(etiqueta){
     var idx=texto.indexOf(etiqueta);
@@ -345,11 +366,11 @@ function parseIAuditor(texto){
   out.iauditor_fecha_visita=primeraLinea('Fecha Visita');
   out.cliente=primeraLinea('Nombre Cliente', 2);
   out.direccion=primeraLinea('Dirección del Proyecto la que será utilizada en la documentación SEC');
-  out.contacto_cliente=primeraLinea('Representantes por el Cliente');
+  out.contacto_cliente=nombrePersona('Representantes por el Cliente');
   // "Representantes por Abastible" en este informe es quien hizo la visita comercial
   // (el vendedor) — el Supervisor que queda a cargo de la ejecución se asigna después
   // (normalmente al adjudicarse) y se carga a mano, nunca se auto-completa desde acá.
-  out.vendedor_abastible=primeraLinea('Representantes por Abastible');
+  out.vendedor_abastible=nombrePersona('Representantes por Abastible');
   out.tipo_proyecto=primeraLinea('Tipo de Proyecto');
   out.potencia_mcal=numeroDespues('Potencia Instalada total en Mcal/h');
 
